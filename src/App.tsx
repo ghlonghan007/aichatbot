@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import GradientBackground from './components/Layout/GradientBackground';
 import ThreeColumnLayout from './components/Layout/ThreeColumnLayout';
-import AvatarList from './components/AvatarList/AvatarList';
+import AvatarList, { AvatarItem } from './components/AvatarList/AvatarList';
 import Avatar3D from './components/Avatar3D';
 import ChatBox, { ChatMessage } from './components/Chat/ChatBox';
 import ControlPanel from './components/ControlPanel/ControlPanel';
+import Settings from './components/Settings/Settings';
 import { speakText, stopSpeaking, isSpeakingSupported } from './lib/tts';
 import { useMicrophoneVAD } from './lib/audio';
+import { aiAPI, conversationAPI, memoryAPI, userAPI } from './lib/api';
 
 // 从 glbdata 目录自动加载的模型列表
 const LOCAL_MODELS = [
@@ -33,17 +35,43 @@ export default function App() {
   const [vadActive, setVadActive] = useState(false);
 
   // 聊天状态
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: '1',
-      role: 'assistant',
-      content: '你好！我是你的 3D AI 助手，有什么可以帮你的吗？',
-      timestamp: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
 
-  // 设置状态
+  // 用户状态
+  const [userId, setUserId] = useState<string>('');
   const [showSettings, setShowSettings] = useState(false);
+
+  // 初始化用户
+  useEffect(() => {
+    const initUser = async () => {
+      let uid = localStorage.getItem('userId');
+      
+      if (!uid) {
+        // 生成临时用户 ID
+        uid = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        try {
+          await userAPI.register(uid, '新用户');
+        } catch (error) {
+          console.error('用户注册失败:', error);
+        }
+      }
+      
+      setUserId(uid);
+      
+      // 添加欢迎消息
+      setMessages([
+        {
+          id: '1',
+          sender: 'ai',
+          text: '你好！我是你的 3D AI 助手，有什么可以帮你的吗？',
+        },
+      ]);
+    };
+
+    initUser();
+  }, []);
 
   const { startMic, stopMic, isActive } = useMicrophoneVAD({
     onSpeechStart: () => {
@@ -97,27 +125,110 @@ export default function App() {
     }
   }, [isActive, startMic, stopMic]);
 
-  const handleSendMessage = useCallback((content: string) => {
+  const handleSendMessage = useCallback(async (text: string) => {
+    if (!text.trim() || chatLoading) return;
+
     // 添加用户消息
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
-      role: 'user',
-      content,
-      timestamp: new Date(),
+      sender: 'user',
+      text,
     };
     setMessages(prev => [...prev, userMessage]);
 
-    // 模拟 AI 回复（稍后会接入真实 API）
-    setTimeout(() => {
-      const aiMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: '我收到了你的消息！后续我们会集成真实的 AI 对话功能。',
+    setChatLoading(true);
+
+    try {
+      // 创建或使用现有对话
+      let conversationId = currentConversationId;
+      if (!conversationId) {
+        const conversation = await conversationAPI.create(userId);
+        conversationId = conversation._id;
+        setCurrentConversationId(conversationId);
+      }
+
+      // 保存用户消息到对话
+      await conversationAPI.addMessage(conversationId, 'user', text);
+
+      // 构建聊天历史
+      const chatHistory = messages.map(msg => ({
+        role: msg.sender === 'user' ? 'user' as const : 'assistant' as const,
+        content: msg.text,
         timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
-    }, 1000);
-  }, []);
+      }));
+
+      chatHistory.push({
+        role: 'user',
+        content: text,
+        timestamp: new Date(),
+      });
+
+      // 调用 AI API（流式）
+      let aiResponse = '';
+      const aiMessageId = (Date.now() + 1).toString();
+      
+      // 添加空的 AI 消息占位符
+      setMessages(prev => [...prev, {
+        id: aiMessageId,
+        sender: 'ai',
+        text: '',
+      }]);
+
+      await aiAPI.chatStream(
+        chatHistory,
+        userId,
+        (chunk) => {
+          aiResponse += chunk;
+          // 更新 AI 消息
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.id === aiMessageId 
+                ? { ...msg, text: aiResponse }
+                : msg
+            )
+          );
+        },
+        {
+          model: 'gpt-3.5-turbo',
+          temperature: 0.7,
+        }
+      );
+
+      // 保存 AI 回复到对话
+      await conversationAPI.addMessage(conversationId, 'assistant', aiResponse);
+
+      // 保存到记忆系统
+      if (aiResponse.length > 20) {
+        await memoryAPI.create({
+          userId,
+          type: 'conversation',
+          content: `用户：${text}\nAI：${aiResponse}`,
+          metadata: {
+            importance: 3,
+          },
+          timestamp: new Date(),
+        });
+      }
+
+      // 使用 TTS 播放回复
+      if (isSpeakingSupported() && aiResponse) {
+        setSpeaking(true);
+        speakText(aiResponse, () => setSpeaking(false));
+      }
+
+    } catch (error: any) {
+      console.error('AI 回复失败:', error);
+      
+      // 添加错误消息
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 2).toString(),
+        sender: 'ai',
+        text: `抱歉，发生了错误：${error.message || '无法获取回复'}。请检查 API Key 设置。`,
+      }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }, [messages, chatLoading, currentConversationId, userId, speaking]);
 
   return (
     <GradientBackground>
@@ -189,45 +300,9 @@ export default function App() {
         }
       />
 
-      {/* 设置模态框（稍后实现） */}
-      {showSettings && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0, 0, 0, 0.8)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => setShowSettings(false)}
-        >
-          <div
-            className="card"
-            style={{
-              width: '600px',
-              maxHeight: '80vh',
-              padding: '24px',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 style={{ marginBottom: '16px' }}>设置</h2>
-            <p style={{ color: '#64748b' }}>
-              设置页面开发中...后续会添加用户信息、API Key 和记忆管理功能。
-            </p>
-            <button
-              className="btn btn-primary"
-              onClick={() => setShowSettings(false)}
-              style={{ marginTop: '16px' }}
-            >
-              关闭
-            </button>
-          </div>
-        </div>
+      {/* 设置模态框 */}
+      {showSettings && userId && (
+        <Settings userId={userId} onClose={() => setShowSettings(false)} />
       )}
     </GradientBackground>
   );

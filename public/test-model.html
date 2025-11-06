@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>测试 Ready Player Me 模型</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      margin: 10px 0;
+      font-size: 14px;
+    }
+    button {
+      padding: 12px 24px;
+      background: #4a90e2;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover {
+      background: #357abd;
+    }
+    .result {
+      margin-top: 20px;
+      padding: 15px;
+      background: #f0f0f0;
+      border-radius: 6px;
+    }
+    .link {
+      color: #4a90e2;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <h2>🔧 Ready Player Me 链接转换工具</h2>
+  <p>将你的 Ready Player Me 头像链接转换为可用的 GLB 模型链接</p>
+  
+  <label>粘贴你的头像链接：</label>
+  <input 
+    type="text" 
+    id="avatarUrl" 
+    placeholder="例如：https://api.playerzero.me/v1/portal/snap-station/gallery/690b63084a1ba3a647a0293d/portrait"
+    value="https://api.playerzero.me/v1/portal/snap-station/gallery/690b63084a1ba3a647a0293d/portrait"
+  >
+  
+  <button onclick="convertUrl()">转换为 GLB 链接</button>
+  
+  <div id="result" class="result" style="display: none;">
+    <h3>✅ 转换结果：</h3>
+    <p><strong>GLB 模型链接：</strong></p>
+    <p class="link" id="glbUrl"></p>
+    
+    <h4>使用方法：</h4>
+    <ol>
+      <li>复制上面的 GLB 链接</li>
+      <li>回到主应用</li>
+      <li>点击"🌐 从 URL 加载"</li>
+      <li>粘贴链接并确认</li>
+    </ol>
+    
+    <button onclick="testUrl()">🧪 测试此链接是否有效</button>
+    <p id="testResult"></p>
+  </div>
+
+  <script>
+    function extractAvatarId(url) {
+      // 尝试多种模式提取 ID
+      const patterns = [
+        /gallery\/([a-f0-9]+)/i,  // PlayerZero gallery 格式
+        /avatar\/([a-f0-9]+)/i,   // 标准 avatar 格式
+        /([a-f0-9]{24})/i,        // 直接匹配 24 位 hex ID
+      ];
+      
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) return match[1];
+      }
+      return null;
+    }
+
+    function convertUrl() {
+      const input = document.getElementById('avatarUrl').value.trim();
+      const avatarId = extractAvatarId(input);
+      
+      if (!avatarId) {
+        alert('无法从链接中提取头像 ID，请检查链接格式');
+        return;
+      }
+      
+      const glbUrl = `https://models.readyplayer.me/${avatarId}.glb`;
+      document.getElementById('glbUrl').textContent = glbUrl;
+      document.getElementById('result').style.display = 'block';
+      document.getElementById('testResult').textContent = '';
+    }
+
+    async function testUrl() {
+      const glbUrl = document.getElementById('glbUrl').textContent;
+      const testResult = document.getElementById('testResult');
+      testResult.textContent = '测试中...';
+      
+      try {
+        const response = await fetch(glbUrl, { method: 'HEAD' });
+        if (response.ok) {
+          testResult.textContent = '✅ 链接有效！可以使用。';
+          testResult.style.color = 'green';
+        } else {
+          testResult.textContent = '❌ 链接无效，状态码：' + response.status;
+          testResult.style.color = 'red';
+        }
+      } catch (error) {
+        testResult.textContent = '❌ 测试失败：' + error.message;
+        testResult.style.color = 'red';
+      }
+    }
+
+    // 自动转换
+    if (document.getElementById('avatarUrl').value) {
+      convertUrl();
+    }
+  </script>
+</body>
+</html>
+
